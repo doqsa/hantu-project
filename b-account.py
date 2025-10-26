@@ -119,7 +119,159 @@ def get_token_for_api():
 
 
 # =========================================================
-# --- 3. 위탁계좌(일반 주식계좌) 잔고 조회 ---
+# --- 3. 시장 상태 조회 함수 ---
+# =========================================================
+
+def get_previous_business_day():
+    """최근 영업일 계산 (주말, 공휴일 제외)"""
+    today = datetime.now()
+    # 최대 10일 전까지 확인
+    for i in range(1, 11):
+        previous_day = today - timedelta(days=i)
+        # 월요일(0)부터 금요일(4)까지만 영업일
+        if previous_day.weekday() <= 4:
+            return previous_day.strftime("%Y%m%d")
+    return today.strftime("%Y%m%d")
+
+
+def get_market_status(access_token, market_id="0"):
+    """시장 전체의 거래량 및 상태 조회
+    market_id: 
+    - "0": 코스피
+    - "1": 코스닥
+    """
+    PATH = "/uapi/domestic-stock/v1/quotations/inquire-index"
+    URL = URL_BASE + PATH
+    
+    headers = {
+        "Content-Type": "application/json",
+        "authorization": f"Bearer {access_token}",
+        "appkey": APP_KEY,
+        "appsecret": APP_SECRET,
+        "tr_id": "FHKUP03500100"  # 업종 지수 조회 TR
+    }
+    
+    # 최근 영업일로 조회
+    business_date = get_previous_business_day()
+    
+    params = {
+        "FID_COND_MRKT_DIV_CODE": market_id,  # 시장구분코드
+        "FID_INPUT_ISCD": "0001" if market_id == "0" else "1001",  # 코스피: 0001, 코스닥: 1001
+        "FID_INPUT_DATE_1": business_date,  # 최근 영업일 지정
+        "FID_INPUT_DATE_2": business_date   # 최근 영업일 지정
+    }
+    
+    try:
+        response = requests.get(URL, headers=headers, params=params)
+        print(f"📡 시장 상태 API 응답 코드: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if data.get('rt_cd') == '0' and 'output' in data:
+                market_data = data['output']
+                return {
+                    'index_name': market_data.get('hts_kor_isnm', ''),
+                    'current_index': float(market_data.get('stck_prpr', '0')),
+                    'volume': int(market_data.get('acml_vol', '0')),
+                    'value': float(market_data.get('acml_tr_pbmn', '0')),
+                    'change_rate': float(market_data.get('prdy_ctrt', '0')),
+                    'trade_date': market_data.get('stck_bsop_date', ''),
+                    'is_historical': True  # 과거 데이터임을 표시
+                }
+            else:
+                print(f"⚠️ 최근 데이터 없음: {data.get('msg1', '데이터 없음')}")
+                # 실시간 데이터로 재시도
+                return get_realtime_market_status(access_token, market_id)
+        else:
+            print(f"❌ 시장 상태 API HTTP 오류: {response.status_code}")
+        return None
+    except Exception as e:
+        print(f"❌ [시장 상태 조회 오류]: {e}")
+        return None
+
+
+def get_realtime_market_status(access_token, market_id="0"):
+    """실시간 시장 상태 조회 시도"""
+    PATH = "/uapi/domestic-stock/v1/quotations/inquire-index"
+    URL = URL_BASE + PATH
+    
+    headers = {
+        "Content-Type": "application/json",
+        "authorization": f"Bearer {access_token}",
+        "appkey": APP_KEY,
+        "appsecret": APP_SECRET,
+        "tr_id": "FHKUP03500100"
+    }
+    
+    params = {
+        "FID_COND_MRKT_DIV_CODE": market_id,
+        "FID_INPUT_ISCD": "0001" if market_id == "0" else "1001"
+    }
+    
+    try:
+        response = requests.get(URL, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('rt_cd') == '0' and 'output' in data:
+                market_data = data['output']
+                return {
+                    'index_name': market_data.get('hts_kor_isnm', ''),
+                    'current_index': float(market_data.get('stck_prpr', '0')),
+                    'volume': int(market_data.get('acml_vol', '0')),
+                    'value': float(market_data.get('acml_tr_pbmn', '0')),
+                    'change_rate': float(market_data.get('prdy_ctrt', '0')),
+                    'trade_date': market_data.get('stck_bsop_date', ''),
+                    'is_historical': False  # 실시간 데이터임을 표시
+                }
+        return None
+    except Exception as e:
+        print(f"❌ [실시간 시장 상태 조회 오류]: {e}")
+        return None
+
+
+def print_market_status(access_token):
+    """코스피와 코스닥의 시장 상태를 출력합니다."""
+    print("\n🔍 시장 상태 조회를 시작합니다...")
+    
+    today = datetime.now().strftime("%Y-%m-%d")
+    print(f"📅 오늘 날짜: {today}")
+    print(f"📊 최근 영업일: {get_previous_business_day()}")
+    
+    # 코스피 시장 상태 조회
+    kospi_status = get_market_status(access_token, "0")
+    if kospi_status:
+        print("\n" + "="*60)
+        data_type = "📜 [과거 데이터]" if kospi_status.get('is_historical') else "🔄 [실시간 데이터]"
+        print(f"📈 {kospi_status['index_name']} 시장 현황 {data_type}")
+        print("="*60)
+        print(f"📅 거래일자: {kospi_status['trade_date']}")
+        print(f"📊 현재 지수: {kospi_status['current_index']:,.2f}")
+        print(f"📈 등락률: {kospi_status['change_rate']:+.2f}%")
+        print(f"🔢 거래량: {kospi_status['volume']:,}주")
+        print(f"💰 거래대금: {kospi_status['value']:,.0f}원")
+    else:
+        print("❌ 코스피 시장 상태 조회 실패 - 시장이 휴장 중일 수 있습니다")
+
+    # 코스닥 시장 상태 조회
+    kosdaq_status = get_market_status(access_token, "1")
+    if kosdaq_status:
+        print("\n" + "="*60)
+        data_type = "📜 [과거 데이터]" if kosdaq_status.get('is_historical') else "🔄 [실시간 데이터]"
+        print(f"📈 {kosdaq_status['index_name']} 시장 현황 {data_type}")
+        print("="*60)
+        print(f"📅 거래일자: {kosdaq_status['trade_date']}")
+        print(f"📊 현재 지수: {kosdaq_status['current_index']:,.2f}")
+        print(f"📈 등락률: {kosdaq_status['change_rate']:+.2f}%")
+        print(f"🔢 거래량: {kosdaq_status['volume']:,}주")
+        print(f"💰 거래대금: {kosdaq_status['value']:,.0f}원")
+        print("="*60)
+    else:
+        print("❌ 코스닥 시장 상태 조회 실패 - 시장이 휴장 중일 수 있습니다")
+
+
+# =========================================================
+# --- 4. 위탁계좌(일반 주식계좌) 잔고 조회 ---
 # =========================================================
 
 def get_deposit_balance(token, app_key, cano, acnt_prdt_cd):
@@ -215,14 +367,13 @@ def get_deposit_balance(token, app_key, cano, acnt_prdt_cd):
 
 
 # =========================================================
-# --- 4. 메인 실행 블록 ---
+# --- 5. 메인 실행 블록 ---
 # =========================================================
 
 if __name__ == "__main__":
-    print("🚀 한국투자증권 위탁계좌 잔고 조회 프로그램 시작")
+    print("🚀 한국투자증권 통합 조회 프로그램 시작")
     print(f"📁 토큰 파일: {TOKEN_FILE}")
     print(f"👤 계좌번호: {CANO}-{ACNT_PRDT_CD}")
-    print(f"📊 계좌유형: 위탁계좌(일반 주식계좌)")
     
     # 토큰 관리 시스템을 통해 유효한 토큰을 가져옵니다.
     final_token = get_token_for_api() 
@@ -230,13 +381,16 @@ if __name__ == "__main__":
     if final_token:
         print(f"🔑 토큰 획득 성공: {final_token[:30]}...")
         
-        # 위탁계좌 잔고 조회
+        # 1. 시장 상태 조회 (공휴일에도 최근 데이터 표시)
+        print_market_status(final_token)
+        
+        # 2. 위탁계좌 잔고 조회
         result = get_deposit_balance(final_token, APP_KEY, CANO, ACNT_PRDT_CD)
         
         if result:
-            print("\n🎉 위탁계좌 조회가 완료되었습니다.")
+            print("\n🎉 모든 조회가 완료되었습니다.")
             print("✅ 프로그램이 정상적으로 작동하고 있습니다!")
         else:
             print("\n❌ 위탁계좌 조회에 실패했습니다.")
     else:
-        print("💥 프로그램을 종료합니다. 유효한 토큰을 확보하지 못했습니다.")
+        print("💥 프로그램을 종료합니다. 유효한 토큰을 확보하지 못했함. ")

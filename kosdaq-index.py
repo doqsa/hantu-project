@@ -9,19 +9,19 @@ from dotenv import load_dotenv
 from token_manage import get_token_for_api
 
 
-def fetch_kospi_period_price(token: str,
-                             app_key: str,
-                             app_secret: str,
-                             url_base: str,
-                             start_date: str,
-                             end_date: str,
-                             period_code: str = "D",
-                             verbose: bool = True) -> List[Dict[str, Any]]:
+def fetch_kosdaq_period_price(token: str,
+                              app_key: str,
+                              app_secret: str,
+                              url_base: str,
+                              start_date: str,
+                              end_date: str,
+                              period_code: str = "D",
+                              verbose: bool = True) -> List[Dict[str, Any]]:
     """
-    KOSPI 지수 기간별 시세 조회 (일/주/월/년)
+    KOSDAQ 지수 기간별 시세 조회 (일/주/월/년)
 
     - 기본값은 일봉(D)
-    - FID_INPUT_ISCD="0001" 는 KOSPI 지수
+    - FID_INPUT_ISCD="1001" 는 KOSDAQ 지수
     - 반환: [{date, open, high, low, close, volume} ...] 최근 날짜순 정렬
     """
     path = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
@@ -37,7 +37,7 @@ def fetch_kospi_period_price(token: str,
 
     params = {
         "FID_COND_MRKT_DIV_CODE": "U",    # 통합증권시장
-        "FID_INPUT_ISCD": "0001",         # KOSPI 지수
+        "FID_INPUT_ISCD": "1001",         # KOSDAQ 지수 (0001: KOSPI, 1001: KOSDAQ)
         "FID_INPUT_DATE_1": start_date,    # 시작일자 YYYYMMDD
         "FID_INPUT_DATE_2": end_date,      # 종료일자 YYYYMMDD
         "FID_PERIOD_DIV_CODE": period_code,  # D/W/M/Y
@@ -82,7 +82,7 @@ def fetch_kospi_period_price(token: str,
 
     result = []
     for row in candles:
-        # 업종/지수 응답은 bstp_nmix_* 필드 사용 (dow.py 참고)
+        # 업종/지수 응답은 bstp_nmix_* 필드 사용
         date = row.get("stck_bsop_date")
         close = row.get("bstp_nmix_prpr")
         open_ = row.get("bstp_nmix_oprc")
@@ -133,19 +133,18 @@ if __name__ == "__main__":
         print("❌ 유효한 토큰을 발급/확보하지 못했습니다.")
         raise SystemExit(1)
 
-    # 2년치 데이터를 50일씩 나눠서 조회
+    # 약 1000일 데이터를 50일씩 20회 조회
     KST = timezone(timedelta(hours=9))
     today_kst = datetime.now(KST)
     yesterday_kst = today_kst - timedelta(days=1)
     
-    # 전체 기간: 약 1000일 (20번 × 50일)
     iterations = 20
     chunk_size = 50  # API 제한: 최대 50일
     
     all_prices = []
     current_end = yesterday_kst
     
-    print(f"📊 데이터 조회 시작 (50일씩 {iterations}회)")
+    print(f"📊 KOSDAQ 데이터 조회 시작 (50일씩 {iterations}회)")
     print(f"   예상 커버 기간: 약 {iterations * chunk_size}일\n")
     
     for i in range(iterations):
@@ -155,7 +154,7 @@ if __name__ == "__main__":
         
         print(f"[{i+1}/{iterations}] 조회 중: {start_str} ~ {end_str}", end=" ")
         
-        chunk_data = fetch_kospi_period_price(
+        chunk_data = fetch_kosdaq_period_price(
             token, APP_KEY, APP_SECRET, URL_BASE,
             start_str, end_str,
             period_code="D",
@@ -193,7 +192,7 @@ if __name__ == "__main__":
     print(f"   첫 거래일: {prices[0]['date']}")
     print(f"   마지막 거래일: {prices[-1]['date']}")
     
-    json_filename = "kospi_index_data.json"
+    json_filename = "kosdaq_index_data.json"
     
     # 기존 JSON 파일 로드 (있으면)
     existing_data = {}
@@ -247,7 +246,7 @@ if __name__ == "__main__":
     # JSON 파일로 저장
     json_output = {
         "generated_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
-        "market": "KOSPI",
+        "market": "KOSDAQ",
         "period_days": len(final_data),
         "start_date": final_data[0]["date"],
         "end_date": final_data[-1]["date"],

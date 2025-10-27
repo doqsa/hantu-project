@@ -143,6 +143,7 @@ def ensure_valid_token(app_key: str,
 if __name__ == "__main__":
     import argparse
     from datetime import timezone as _timezone
+    from dotenv import load_dotenv
 
     parser = argparse.ArgumentParser(description="토큰 상태 점검 및 (옵션) 갱신")
     parser.add_argument("--token-file", default=TOKEN_FILE, help=f"토큰 파일 경로 (기본: {TOKEN_FILE})")
@@ -183,17 +184,24 @@ if __name__ == "__main__":
         print("⚠️ 현재 토큰은 유효하지 않습니다. (만료되었거나 여유시간 이내)")
         if args.refresh:
             print("🔄 옵션 --refresh 지정됨: 새 토큰 발급 시도")
-            # b_account에서 키/URL을 가져와 갱신 시도
+            # .env에서 키/URL을 로드하여 갱신 시도 (b_account 의존 제거)
             try:
-                from b_account import APP_KEY, APP_SECRET, URL_BASE
-                new_token, status = ensure_valid_token(APP_KEY, APP_SECRET, URL_BASE, token_file=args.token_file, security_margin=args.security_margin)
-                if status == "refreshed":
-                    print("✅ 새 토큰 발급 및 저장 완료")
-                elif status == "reused":
-                    print("ℹ️ 직전 단계에서 재사용 가능해졌습니다(경합 상황).")
+                load_dotenv()
+                APP_KEY = os.getenv("APP_KEY")
+                APP_SECRET = os.getenv("APP_SECRET")
+                URL_BASE = os.getenv("URL_BASE", "https://openapi.koreainvestment.com:9443")
+
+                if not APP_KEY or not APP_SECRET:
+                    print("❌ .env에서 APP_KEY/APP_SECRET을 찾을 수 없습니다. .env 파일을 확인하세요.")
                 else:
-                    print("❌ 새 토큰 발급 실패")
-            except ImportError:
-                print("❌ APP_KEY/APP_SECRET/URL_BASE를 읽기 위해 b_account 모듈이 필요합니다.")
+                    new_token, status = ensure_valid_token(APP_KEY, APP_SECRET, URL_BASE, token_file=args.token_file, security_margin=args.security_margin)
+                    if status == "refreshed":
+                        print("✅ 새 토큰 발급 및 저장 완료")
+                    elif status == "reused":
+                        print("ℹ️ 직전 단계에서 재사용 가능해졌습니다(경합 상황).")
+                    else:
+                        print("❌ 새 토큰 발급 실패")
+            except Exception as e:
+                print(f"❌ .env 로드/토큰 갱신 중 오류: {e}")
         else:
             print("ℹ️ --refresh 옵션을 사용하면 즉시 새 토큰 발급을 시도합니다.")

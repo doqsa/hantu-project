@@ -2,20 +2,18 @@ import requests
 import json
 import time
 import urllib.parse
-from dotenv import load_dotenv
 import os
 from datetime import datetime, timedelta, timezone
 from token_manage import get_token_for_api
+import key  # key.py 파일에서 설정 불러오기
 
 # =========================================================
-# --- 1. 설정 변수 (App Key/Secret은 보안에 유의하세요) ---
+# --- 1. 설정 변수 (key.py에서 불러오기) ---
 # =========================================================
-# 환경 변수에서 APP_KEY와 APP_SECRET을 안전하게 불러옵니다.
-load_dotenv()
-APP_KEY = os.environ.get('APP_KEY')
-APP_SECRET = os.environ.get('APP_SECRET')
-URL_BASE = "https://openapi.koreainvestment.com:9443"
-TOKEN_FILE = 'token-expire.json'
+APP_KEY = key.APP_KEY
+APP_SECRET = key.APP_SECRET
+URL_BASE = key.URL_BASE
+TOKEN_FILE = key.TOKEN_FILE
 SECURITY_MARGIN = 60 * 10  # 토큰 만료 10분 전이면 갱신 시도 (안전 여유 시간)
 
 # 잔고 조회용 설정

@@ -1,6 +1,7 @@
 # Ignore sensitive and local files
 key.py
 token-expire.json
-hantu-key.pem
+*.pem
+*.ppk
 # Environment variables
 .env

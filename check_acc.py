@@ -86,7 +86,7 @@ def get_deposit_balance(token, app_key, cano, acnt_prdt_cd):
                     if value and str(value) != '0':
                         print(f"   {description}: {int(value):>15,} 원")
                 
-                # 투자가능 금액 및 6% 계산
+                # 투자가능 금액 및 6% 계산``
                 tot_evlu_amt = int(cash_info.get('tot_evlu_amt', '0'))  # 총평가금액 (투자가능금액)
                 six_percent = int(tot_evlu_amt * 0.06)
                 

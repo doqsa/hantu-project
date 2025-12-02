@@ -123,7 +123,7 @@ def get_deposit_balance(token, app_key, cano, acnt_prdt_cd):
 # =========================================================
 
 if __name__ == "__main__":
-    print("🚀 한국투자증권 통합 조회 프로그램 시작")
+    print("🚀 한국투자증권 계좌 조회 프로그램")
     print(f"📁 토큰 파일: {TOKEN_FILE}")
     print(f"👤 계좌번호: {CANO}-{ACNT_PRDT_CD}")
     
@@ -133,14 +133,13 @@ if __name__ == "__main__":
     if final_token:
         print(f"🔑 토큰 획득 성공: {final_token[:30]}...")
         
-        
-        # 2. 위탁계좌 잔고 조회
+        # 위탁계좌 잔고 조회
         result = get_deposit_balance(final_token, APP_KEY, CANO, ACNT_PRDT_CD)
         
         if result:
-            print("\n🎉 모든 조회가 완료되었습니다.")
+            print("\n🎉 계좌 조회가 완료되었습니다.")
             print("✅ 프로그램이 정상적으로 작동하고 있습니다!")
         else:
-            print("\n❌ 위탁계좌 조회에 실패했습니다.")
+            print("\n❌ 계좌 조회에 실패했습니다.")
     else:
-        print("💥 프로그램을 종료합니다. 유효한 토큰을 확보하지 못했함. ")
+        print("💥 프로그램을 종료합니다. 유효한 토큰을 확보하지 못했음. ")

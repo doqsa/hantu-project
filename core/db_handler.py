@@ -166,31 +166,38 @@ class DBHandler:
         self.is_running = True
         print("[DB] 비동기 저장 모듈 가동 시작...")
 
-        while self.is_running:
-            try:
-                # 큐에서 데이터 대기
-                data = await self.db_queue.get()
-                dtype = data.get('type')
+        try:
+            while self.is_running:
+                try:
+                    # 큐에서 데이터 대기
+                    data = await self.db_queue.get()
+                    dtype = data.get('type')
 
-                # 연결 풀에서 커넥션 획득하여 쿼리 실행
-                async with self.pool.acquire() as conn:
-                    if dtype == 'TRADE':
-                        await self._insert_trade(conn, data)
-                    elif dtype == 'ORDERBOOK':
-                        await self._insert_hoga(conn, data)
-                    elif dtype == 'FUTURES':
-                        await self._insert_futures(conn, data)
-                    elif dtype == 'NAV': 
-                        await self._insert_nav(conn, data)
-                    else:
-                        pass # 알 수 없는 데이터 타입
+                    # 연결 풀에서 커넥션 획득하여 쿼리 실행
+                    async with self.pool.acquire() as conn:
+                        if dtype == 'TRADE':
+                            await self._insert_trade(conn, data)
+                        elif dtype == 'ORDERBOOK':
+                            await self._insert_hoga(conn, data)
+                        elif dtype == 'FUTURES':
+                            await self._insert_futures(conn, data)
+                        elif dtype == 'NAV': 
+                            await self._insert_nav(conn, data)
+                        else:
+                            pass # 알 수 없는 데이터 타입
 
-                self.db_queue.task_done()
-                
-            except Exception as e:
-                print(f"[DB 에러] 저장 중 오류 발생: {e}")
-                # 연결이 끊겼을 경우 등을 대비해 잠시 대기
-                await asyncio.sleep(0.1)
+                    self.db_queue.task_done()
+                    
+                except Exception as e:
+                    print(f"[DB 에러] 저장 중 오류 발생: {e}")
+                    # 연결이 끊겼을 경우 등을 대비해 잠시 대기
+                    await asyncio.sleep(0.1)
+        
+        except asyncio.CancelledError:
+            print("[DB] 정상 종료됨")
+            raise
+        except Exception as e:
+            print(f"[DB] 심각한 오류: {e}")
 
     def close(self):
         """DB 연결 풀 종료"""

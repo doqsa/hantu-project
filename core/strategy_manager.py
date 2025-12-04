@@ -2,6 +2,7 @@ import asyncio
 import pandas as pd
 import numpy as np
 from collections import deque
+from datetime import datetime, timedelta
 
 class StrategyManager:
     def __init__(self, strategy_queue, order_queue):
@@ -23,6 +24,11 @@ class StrategyManager:
         # 상태 관리 (EMPTY, HOLDING)
         self.current_state = "EMPTY" 
         self.avg_price = 0  # 평단가 (보유중일 때)
+        
+        # --- 워밍업 기간 ---
+        self.start_time = datetime.now()
+        self.warmup_seconds = 300  # 5분 워밍업 기간
+        self.warmup_complete = False
 
     def calculate_indicators(self):
         """ 볼린저 밴드(20,2)와 RSI(14) 계산 """
@@ -75,12 +81,17 @@ class StrategyManager:
                         # 지표 계산
                         lower_band, rsi, last_close = self.calculate_indicators()
                         
+                        # --- 워밍업 기간 체크 ---
+                        elapsed = (datetime.now() - self.start_time).total_seconds()
+                        if elapsed >= self.warmup_seconds:
+                            self.warmup_complete = True
+                        
                         if lower_band is not None:
                             # === [전략 판단 로직] ===
                             print(f"[전략] {self.last_minute[-5:]} | 가격:{last_close} | 하단:{lower_band:.0f} | RSI:{rsi:.1f}")
                             
-                            # 1. 진입 (b1): 무포지션 AND 밴드하단 돌파 AND RSI<30
-                            if self.current_state == "EMPTY":
+                            # 1. 진입 (b1): 무포지션 AND 밴드하단 돌파 AND RSI<30 AND 워밍업 완료
+                            if self.current_state == "EMPTY" and self.warmup_complete:
                                 if last_close < lower_band and rsi < 30:
                                     print(f"🚀 [매수 신호] 과매도 구간 포착! (b1 진입)")
                                     await self.order_queue.put({
@@ -88,6 +99,11 @@ class StrategyManager:
                                     })
                                     self.current_state = "HOLDING"
                                     self.avg_price = last_close # (단순화: 체결 가정)
+                            
+                            elif not self.warmup_complete:
+                                # 워밍업 중 진행률 표시
+                                progress = int((elapsed / self.warmup_seconds) * 100)
+                                print(f"[워밍업] {progress}% - {len(self.close_history)}/20개 데이터 축적")
 
                             # 2. 청산 (s1) 또는 추가매수 (b2)는 실시간 가격으로 판단
                             # (여기서는 분봉 종가 기준으로 단순화했지만, 실전엔 틱마다 체크 가능)

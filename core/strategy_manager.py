@@ -1,138 +1,186 @@
 import asyncio
 import pandas as pd
-import numpy as np
+import pandas_ta as ta  # [추가] 정확한 지표 계산용
+import aiohttp          # [추가] 과거 데이터 조회용
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime
 
 class StrategyManager:
-    def __init__(self, strategy_queue, order_queue):
+    def __init__(self, strategy_queue, order_queue, token_manager):
         """
-        :param strategy_queue: 데이터 프로세서에서 넘어온 시세 데이터 (Input)
-        :param order_queue: 주문 매니저로 보낼 주문 신호 (Output)
+        :param token_manager: REST API로 과거 데이터를 긁어오기 위해 필요
         """
         self.strategy_queue = strategy_queue
         self.order_queue = order_queue
+        self.token_manager = token_manager # 토큰 매니저 추가
         
-        # --- 지표 계산을 위한 데이터 버퍼 ---
-        # 1분봉 생성을 위한 틱 데이터 임시 저장소
+        # 1분봉 데이터 저장소 (DataFrame으로 관리하는 게 지표 계산에 더 유리함)
+        # 컬럼: [time, open, high, low, close]
+        self.ohlc_data = pd.DataFrame(columns=['time', 'open', 'high', 'low', 'close'])
+        
         self.current_minute_ticks = []
         self.last_minute = None
         
-        # 지표 계산용 과거 종가 리스트 (최대 100개 유지)
-        self.close_history = deque(maxlen=100)
-        
-        # 상태 관리 (EMPTY, HOLDING)
+        # 상태 관리
         self.current_state = "EMPTY" 
-        self.avg_price = 0  # 평단가 (보유중일 때)
+        self.avg_price = 0
         
-        # --- 워밍업 기간 ---
-        self.start_time = datetime.now()
-        self.warmup_seconds = 300  # 5분 워밍업 기간
-        self.warmup_complete = False
+        # KODEX 200 종목코드 (필요시 변경 가능하게 설정)
+        self.code = "069500"
+
+    async def fetch_initial_data(self):
+        """ [웜업] 장 시작 전, REST API로 과거 1분봉 100개를 가져와 채워넣음 """
+        print("[Strategy] 📡 과거 데이터 요청 중... (Waiting 방지)")
+        
+        url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+        headers = {
+            "Content-Type": "application/json",
+            "authorization": f"Bearer {self.token_manager.manage_token()}",
+            "appkey": self.token_manager.app_key,
+            "appsecret": self.token_manager.app_secret,
+            "tr_id": "FHKST03010200"
+        }
+        
+        # 현재 시간 기준 과거 조회
+        now_time = datetime.now().strftime("%H%M%S")
+        params = {
+            "FID_ETC_CLS_CODE": "",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": self.code,
+            "FID_INPUT_HOUR_1": now_time,
+            "FID_PW_DATA_INCU_YN": "Y"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, params=params) as response:
+                    data = await response.json()
+                    if data['rt_cd'] == '0':
+                        items = data['output2']
+                        # 과거 -> 현재 순으로 정렬
+                        temp_list = []
+                        for item in reversed(items):
+                            temp_list.append({
+                                'time': item['stck_cntg_hour'], # 예: 090100
+                                'open': float(item['stck_oprc']),
+                                'high': float(item['stck_hgpr']),
+                                'low': float(item['stck_lwpr']),
+                                'close': float(item['stck_prpr'])
+                            })
+                        
+                        # DataFrame 초기화
+                        self.ohlc_data = pd.DataFrame(temp_list)
+                        print(f"[Strategy] ✅ 과거 데이터 {len(self.ohlc_data)}개 로드 완료! 즉시 매매 가능.")
+                    else:
+                        print(f"[Strategy] ⚠️ 초기 데이터 로드 실패: {data['msg1']}")
+        except Exception as e:
+            print(f"[Strategy] 웜업 중 에러: {e}")
 
     def calculate_indicators(self):
-        """ 볼린저 밴드(20,2)와 RSI(14) 계산 """
-        if len(self.close_history) < 20:
-            return None, None, None # 데이터 부족
+        """ pandas-ta를 이용한 정밀 계산 """
+        if len(self.ohlc_data) < 20:
+            return None, None, None
 
-        series = pd.Series(self.close_history)
+        # 1. 볼린저 밴드 (20, 2)
+        # BBL: Lower, BBM: Mid, BBU: Upper
+        bb = ta.bbands(self.ohlc_data['close'], length=20, std=2)
+        if bb is None: return None, None, None # 데이터 부족시 None 반환될 수 있음
+
+        # 2. RSI (14)
+        rsi_series = ta.rsi(self.ohlc_data['close'], length=14)
+
+        # 마지막(최신) 값 추출
+        # iloc[-1]은 가장 최근 데이터
+        current_close = self.ohlc_data['close'].iloc[-1]
         
-        # 1. 볼린저 밴드 (20일 이동평균, 승수 2)
-        ma20 = series.rolling(window=20).mean().iloc[-1]
-        std = series.rolling(window=20).std().iloc[-1]
-        upper = ma20 + (std * 2)
-        lower = ma20 - (std * 2)
-        
-        # 2. RSI (14일)
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs)).iloc[-1]
-        
-        return lower, rsi, series.iloc[-1] # 하단밴드, RSI, 현재가
+        # pandas_ta 컬럼명: BBL_20_2.0
+        lower_band = bb['BBL_20_2.0'].iloc[-1]
+        current_rsi = rsi_series.iloc[-1]
+
+        return lower_band, current_rsi, current_close
 
     async def run(self):
-        print("[Strategy] 전략 감시 시작 (BB + RSI 마틴게일)")
+        # [중요] 시작하자마자 데이터 채우기 (5분 대기 삭제)
+        await self.fetch_initial_data()
+        
+        print("[Strategy] 🚀 실시간 전략 감시 시작 (BB + RSI)")
         
         try:
             while True:
-                # 1. 실시간 데이터 수신
                 data = await self.strategy_queue.get()
                 
-                # 틱 데이터에서 시간과 가격 추출
-                # data format: {'code':..., 'price':..., 'timestamp':...}
-                current_price = data['price']
-                # 타임스탬프가 문자열이라면 변환 필요할 수 있음. 여기선 시:분만 추출한다고 가정
-                # data['timestamp'] 예: "2025-12-05 09:30:01"
-                current_time_str = data['timestamp'] # 초 단위까지 있다고 가정
-                current_minute = current_time_str[:16] # "YYYY-MM-DD HH:MM" 까지만 잘라서 분 구분
+                # 데이터 파싱
+                current_price = float(data['price'])
+                current_time_str = data['timestamp'] # 예: "2025-12-05 09:30:01"
                 
-                # --- 1분봉 생성 로직 ---
+                # "분" 추출 (YYYY-MM-DD HH:MM)
+                current_minute = current_time_str[:16]
+
+                # --- [분봉 생성 로직] ---
                 if self.last_minute is None:
                     self.last_minute = current_minute
                 
+                # 분이 바뀌면 이전 분봉 확정 및 DataFrame에 추가
                 if current_minute != self.last_minute:
-                    # 분이 바뀌었음 -> 직전 분봉 확정 및 지표 계산
                     if self.current_minute_ticks:
-                        close_p = self.current_minute_ticks[-1]
-                        self.close_history.append(close_p)
+                        # 1분봉 데이터 확정 (시가, 고가, 저가, 종가)
+                        minute_open = self.current_minute_ticks[0]
+                        minute_high = max(self.current_minute_ticks)
+                        minute_low = min(self.current_minute_ticks)
+                        minute_close = self.current_minute_ticks[-1]
                         
-                        # 지표 계산
+                        # DataFrame에 새 행 추가
+                        new_row = {
+                            'time': self.last_minute, # 이전 분 시간
+                            'open': minute_open,
+                            'high': minute_high,
+                            'low': minute_low,
+                            'close': minute_close
+                        }
+                        # concat 사용 (pandas 최신 권장)
+                        self.ohlc_data = pd.concat([self.ohlc_data, pd.DataFrame([new_row])], ignore_index=True)
+                        
+                        # 메모리 관리: 100개 넘으면 앞부분 삭제
+                        if len(self.ohlc_data) > 100:
+                            self.ohlc_data = self.ohlc_data.iloc[-100:]
+
+                        # === 지표 계산 및 신호 판단 (봉 마감 기준) ===
                         lower_band, rsi, last_close = self.calculate_indicators()
                         
-                        # --- 워밍업 기간 체크 ---
-                        elapsed = (datetime.now() - self.start_time).total_seconds()
-                        if elapsed >= self.warmup_seconds:
-                            self.warmup_complete = True
-                        
                         if lower_band is not None:
-                            # === [전략 판단 로직] ===
-                            print(f"[전략] {self.last_minute[-5:]} | 가격:{last_close} | 하단:{lower_band:.0f} | RSI:{rsi:.1f}")
+                            print(f"[전략] {self.last_minute[-5:]} | 💰:{last_close} | 하단:{lower_band:.0f} | RSI:{rsi:.1f}")
                             
-                            # 1. 진입 (b1): 무포지션 AND 밴드하단 돌파 AND RSI<30 AND 워밍업 완료
-                            if self.current_state == "EMPTY" and self.warmup_complete:
+                            # [진입 로직] b1
+                            if self.current_state == "EMPTY":
                                 if last_close < lower_band and rsi < 30:
-                                    print(f"🚀 [매수 신호] 과매도 구간 포착! (b1 진입)")
+                                    print(f"🚀 [매수] 과매도 포착! (b1)")
                                     await self.order_queue.put({
                                         "type": "BUY", "stage": "b1", "price": last_close
                                     })
                                     self.current_state = "HOLDING"
-                                    self.avg_price = last_close # (단순화: 체결 가정)
-                            
-                            elif not self.warmup_complete:
-                                # 워밍업 중 진행률 표시
-                                progress = int((elapsed / self.warmup_seconds) * 100)
-                                print(f"[워밍업] {progress}% - {len(self.close_history)}/20개 데이터 축적")
-
-                            # 2. 청산 (s1) 또는 추가매수 (b2)는 실시간 가격으로 판단
-                            # (여기서는 분봉 종가 기준으로 단순화했지만, 실전엔 틱마다 체크 가능)
+                                    self.avg_price = last_close
                     
                     # 초기화
                     self.current_minute_ticks = []
                     self.last_minute = current_minute
                 
-                # 틱 데이터 모으기
+                # 틱 데이터 수집
                 self.current_minute_ticks.append(current_price)
 
-                # === [보유 중 실시간 감시] ===
+                # --- [실시간 익절 감시] (틱 단위) ---
                 if self.current_state == "HOLDING":
-                    # 익절 조건: 평단가 대비 0.3% 수익 (수수료 커버 후 수익)
+                    # 목표가: 평단 + 0.3%
                     target_price = self.avg_price * 1.003
                     
                     if current_price >= target_price:
-                        print(f"💰 [익절 신호] 목표 수익 달성! (s1 청산)")
+                        print(f"💰 [익절] 목표 달성! (s1) 현재가:{current_price}")
                         await self.order_queue.put({
                             "type": "SELL", "stage": "s1", "price": current_price
                         })
                         self.current_state = "EMPTY"
                         self.avg_price = 0
-                    
-                    # 물타기 조건 (b2): 평단가 대비 -0.5% 하락 시 (추후 구현)
-                    # if current_price <= self.avg_price * 0.995: ...
-        
+
         except asyncio.CancelledError:
-            print("[Strategy] 정상 종료됨")
-            raise
+            print("[Strategy] 종료")
         except Exception as e:
-            print(f"[Strategy] 오류 발생: {e}")
+            print(f"[Strategy] 오류: {e}")

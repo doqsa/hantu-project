@@ -3,6 +3,7 @@ import aiomysql
 import os
 from dotenv import load_dotenv
 
+# ê²½ë¡œ ?¤ì •
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_FILE = os.path.join(BASE_DIR, '.env')
 load_dotenv(ENV_FILE)
@@ -13,6 +14,7 @@ class DBHandler:
         self.pool = None
         self.is_running = False
         
+        # .env?ì„œ DB ?•ë³´ ë¡œë“œ
         self.host = os.getenv("DB_HOST", "127.0.0.1")
         self.user = os.getenv("DB_USER")
         self.password = os.getenv("DB_PASSWORD")
@@ -20,7 +22,7 @@ class DBHandler:
         self.port = int(os.getenv("DB_PORT", 3306))
 
     async def _init_pool(self):
-        """DB ì—°ê²° í’€ ìƒì„±"""
+        """DB ?°ê²° ?€ ?ì„± (ë¹„ë™ê¸?"""
         try:
             self.pool = await aiomysql.create_pool(
                 host=self.host,
@@ -28,40 +30,50 @@ class DBHandler:
                 user=self.user,
                 password=self.password,
                 db=self.db_name,
-                minsize=2,
-                maxsize=10,
-                autocommit=True
+                autocommit=True, # ë¡œê·¸???°ì´?°ëŠ” ?ë™ ì»¤ë°‹???±ëŠ¥??? ë¦¬
+                charset='utf8mb4'
             )
-            print("[DB] ì—°ê²° í’€ ìƒì„± ì™„ë£Œ (localhost:3306)")
+            print(f"[DB] ?°ê²° ?€ ?ì„± ?„ë£Œ ({self.host}:{self.port})")
         except Exception as e:
-            print(f"[DB ì˜¤ë¥˜] ì—°ê²° í’€ ìƒì„± ì‹¤íŒ¨: {e}")
-            raise
+            print(f"[ì¹˜ëª…???¤ë¥˜] DB ?°ê²° ?¤íŒ¨: {e}")
+            raise e
 
     async def _insert_trade(self, conn, data):
-        """ì²´ê²° ë°ì´í„° ì €ì¥"""
+        """KODEX 200 ì²´ê²° ?°ì´???€??""
+        # [ì°¸ê³ : ?´ì „ ?˜ì • ? ì?] stck_prpr???¬ìš©
         sql = """
             INSERT INTO kodex200_trade (
-                bsop_date, cntg_time, stck_prpr, cntg_vol, 
-                acml_tr_pbmn, created_at
-            ) VALUES (%s, %s, %s, %s, %s, %s)
+                bsop_date, cntg_time, stck_prpr, prdy_vrss, prdy_ctrt,
+                cntg_vol, acml_vol, acml_tr_pbmn, 
+                stck_oprc, stck_hgpr, stck_lwpr, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         timestamp = data.get('timestamp')
         now_date = timestamp[:10].replace('-', '')
         now_time = timestamp[11:19].replace(':', '')
         
+        # ?„ì¬ê°€??'?„ì¬ê°€' ?ëŠ” 'price' ?¤ì— ?ˆì„ ???ˆìŒ
+        current_price = data.get('?„ì¬ê°€') or data.get('price', 0)
+        
         args = (
-            now_date, now_time,
-            data.get('í˜„ì¬ê°€'),
-            data.get('ì²´ê²°ëŸ‰'),
-            data.get('ì²´ê²°ê¸ˆì•¡'),
+            now_date, now_time, 
+            current_price,                  # stck_prpr (?„ì¬ê°€)
+            data.get('?„ì¼?€ë¹?, 0),          # prdy_vrss
+            data.get('?±ë½ë¥?, 0.0),          # prdy_ctrt
+            data.get('ì²´ê²°??, 0),            # cntg_vol
+            data.get('?„ì ê±°ë˜??, 0),         # acml_vol
+            data.get('?„ì ê±°ë˜?€ê¸?, 0),       # acml_tr_pbmn
+            current_price,                  # stck_oprc (?œê? - ?„ì‹œë¡??„ì¬ê°€ ?¬ìš©)
+            current_price,                  # stck_hgpr (ê³ ê? - ?„ì‹œë¡??„ì¬ê°€ ?¬ìš©)
+            current_price,                  # stck_lwpr (?€ê°€ - ?„ì‹œë¡??„ì¬ê°€ ?¬ìš©)
             timestamp
         )
-        
         async with conn.cursor() as cur:
             await cur.execute(sql, args)
 
     async def _insert_hoga(self, conn, data):
-        """í˜¸ê°€ ë°ì´í„° ì €ì¥"""
+        """KODEX 200 ?¸ê? ë°?ë¶„ì„ ì§€???€??""
+        # [?˜ì • ?„ë£Œ] SQL ì»¬ëŸ¼ ê°œìˆ˜?€ VALUES %s ê°œìˆ˜ 50ê°??¼ì¹˜?œí‚´
         sql = """
             INSERT INTO kodex200_hoga (
                 bsop_date, hoga_time, 
@@ -85,20 +97,24 @@ class DBHandler:
         now_date = timestamp[:10].replace('-', '')
         now_time = timestamp[11:19].replace(':', '')
 
+        # ë§¤ê°œë³€??ë¦¬ìŠ¤??êµ¬ì„±
         args = [
             now_date, now_time,
             data.get('imbalance_ratio'), data.get('wap_ask'), data.get('wap_bid'),
             data.get('resistance_wall'), data.get('support_wall')
         ]
         
+        # ë§¤ë„ 1~10?¨ê³„ (20ê°???ª©)
         for i in range(1, 11):
-            args.append(data.get(f'ë§¤ë„í˜¸ê°€{i}', 0))
-            args.append(data.get(f'ë§¤ë„í˜¸ê°€ì”ëŸ‰{i}', 0))
+            args.append(data.get(f'ë§¤ë„?¸ê?{i}', 0))
+            args.append(data.get(f'ë§¤ë„?¸ê??”ëŸ‰{i}', 0))
             
+        # ë§¤ìˆ˜ 1~10?¨ê³„ (20ê°???ª©)
         for i in range(1, 11):
-            args.append(data.get(f'ë§¤ìˆ˜í˜¸ê°€{i}', 0))
-            args.append(data.get(f'ë§¤ìˆ˜í˜¸ê°€ì”ëŸ‰{i}', 0))
+            args.append(data.get(f'ë§¤ìˆ˜?¸ê?{i}', 0))
+            args.append(data.get(f'ë§¤ìˆ˜?¸ê??”ëŸ‰{i}', 0))
             
+        # ì´ì”??ë°??€?„ìŠ¤?¬í”„ (3ê°???ª©) - ?„ë“œëª?total_ask_all/total_bid_allë¡??˜ì •
         args.append(data.get('total_ask_all', 0))
         args.append(data.get('total_bid_all', 0))
         args.append(timestamp)
@@ -107,7 +123,8 @@ class DBHandler:
             await cur.execute(sql, tuple(args))
 
     async def _insert_futures(self, conn, data):
-        """ì„ ë¬¼ ë°ì´í„° ì €ì¥"""
+        """KOSPI 200 ? ë¬¼ ?°ì´???€??""
+        # [ì°¸ê³ : ?´ì „ ?˜ì • ? ì?] current_price -> price ë¡?ë³€ê²?
         sql = """
             INSERT INTO kospi200_futures (
                 bsop_date, cntg_time, futures_code,
@@ -119,35 +136,44 @@ class DBHandler:
         now_date = timestamp[:10].replace('-', '')
         now_time = timestamp[11:19].replace(':', '')
         
+        # ?„ì¬ê°€??'?„ì¬ê°€' ?ëŠ” 'price' ?¤ì— ?ˆì„ ???ˆìŒ
+        current_price = data.get('?„ì¬ê°€') or data.get('price', 0)
+        
         args = (
             now_date, now_time,
-            data.get('futures_code'),
-            data.get('price'),
-            data.get('open_interest'),
-            data.get('volume'),
-            data.get('accum_volume'),
-            data.get('theory_price'),
-            data.get('basis'),
+            data.get('code', ''),
+            current_price,
+            data.get('ë¯¸ê²°?œì•½??, 0),
+            data.get('ì²´ê²°??, 0),
+            data.get('?„ì ê±°ë˜??, 0),
+            data.get('?´ë¡ ê°€', 0.0),
+            data.get('ê´´ë¦¬??, 0.0),
             timestamp
         )
+        
+        print(f"[DB] ? ë¬¼ ?°ì´???€?? ì½”ë“œ={data.get('code')}, ê°€ê²?{current_price}, ë¯¸ê²°??{data.get('ë¯¸ê²°?œì•½??)}")
         
         try:
             async with conn.cursor() as cur:
                 await cur.execute(sql, args)
+                print(f"[DB] ??? ë¬¼ ?°ì´???€???±ê³µ")
         except Exception as e:
-            print(f"[DB] ì„ ë¬¼ ë°ì´í„° ì €ì¥ ì‹¤íŒ¨: {e}")
+            print(f"[DB] ??? ë¬¼ ?°ì´???€???¤íŒ¨: {e}")
+            print(f"[DB] SQL: {sql}")
+            print(f"[DB] Args: {args}")
             raise
 
     async def _insert_nav(self, conn, data):
-        """iNAV ë° ê´´ë¦¬ìœ¨ ë°ì´í„° ì €ì¥"""
+        """iNAV ë°?ê´´ë¦¬???°ì´???€??(?¬ìš©???”ì²­ ì½”ë“œ ë°˜ì˜)"""
+        # [ì°¸ê³ : ?´ì „ ?˜ì • ? ì?] current_price -> price ë¡?ë³€ê²?
         sql = """
             INSERT INTO kodex200_nav (
-                bsop_date, check_time, current_price, nav, disparity, created_at
+                bsop_date, check_time, price, nav, disparity, created_at
             ) VALUES (%s, %s, %s, %s, %s, %s)
         """
         timestamp = data.get('timestamp')
         now_date = timestamp[:10].replace('-', '') 
-        now_time = timestamp[11:19].replace(':', '')
+        now_time = timestamp[11:19].replace(':', '') 
         
         args = (
             now_date, now_time,
@@ -160,7 +186,7 @@ class DBHandler:
             await cur.execute(sql, args)
 
     async def _insert_exchange(self, conn, data):
-        """í™˜ìœ¨ ë°ì´í„° ì €ì¥ (USD/KRW)"""
+        """?˜ìœ¨ ?°ì´???€??(USD/KRW)"""
         sql = """
             INSERT INTO market_exchange (
                 bsop_date, check_time, currency, rate, created_at
@@ -169,28 +195,31 @@ class DBHandler:
         timestamp = data.get('timestamp')
         now_date = timestamp[:10].replace('-', '')
         now_time = timestamp[11:19].replace(':', '')
-        
+
         args = (
             now_date, now_time,
             data.get('currency', 'USD'),
             data.get('rate'),
             timestamp
         )
-        
+
         async with conn.cursor() as cur:
             await cur.execute(sql, args)
 
     async def run(self):
-        """DB ì €ì¥ ë£¨í”„ ì‹œì‘"""
+        """DB ?€??ë£¨í”„ ?œì‘"""
         await self._init_pool()
         self.is_running = True
-        print("[DB] ë¹„ë™ê¸° ì €ì¥ ëª¨ë“ˆ ê°€ë™ ì‹œì‘...")
+        print("[DB] ë¹„ë™ê¸??€??ëª¨ë“ˆ ê°€???œì‘...")
 
         try:
             while self.is_running:
                 try:
+                    # ?ì—???°ì´???€ê¸?
                     packet = await self.db_queue.get()
                     
+                    # ?œì? ?¬ë§·: {"table": "...", "data": {...}}
+                    # ?˜ìœ¨/ê¸€ë¡œë²Œ ?°ì´?°ëŠ” dataë§??„ë‹¬?????ˆìœ¼ë¯€ë¡?? ì—°?˜ê²Œ ì²˜ë¦¬
                     if isinstance(packet, dict) and 'data' in packet:
                         table_name = packet.get('table')
                         data = packet.get('data')
@@ -202,6 +231,7 @@ class DBHandler:
                         self.db_queue.task_done()
                         continue
 
+                    # ?°ê²° ?€?ì„œ ì»¤ë„¥???ë“?˜ì—¬ ì¿¼ë¦¬ ?¤í–‰
                     async with self.pool.acquire() as conn:
                         if table_name == 'kodex200_trade':
                             await self._insert_trade(conn, data)
@@ -213,28 +243,29 @@ class DBHandler:
                             await self._insert_nav(conn, data)
                         elif data.get('type') == 'EXCHANGE':
                             await self._insert_exchange(conn, data)
-                        elif data.get('type') == 'NAV':
-                            await self._insert_nav(conn, data)
                         elif data.get('type') == 'GLOBAL_MARKET':
-                            pass
+                            pass  # TODO
+                        elif data.get('type') == 'NAV':
+                            await self._insert_nav(conn, data): ê¸€ë¡œë²Œ ?œì¥ ì§€???€???Œì´ë¸??°ë™
                         else:
-                            pass
+                            pass # ?????†ëŠ” ?Œì´ë¸?
 
                     self.db_queue.task_done()
                     
                 except Exception as e:
-                    print(f"[DB ì—ëŸ¬] ì €ì¥ ì¤‘ ì˜¤ë¥˜: {e}")
+                    print(f"[DB ?ëŸ¬] ?€??ì¤??¤ë¥˜ ë°œìƒ: {e}")
+                    # ?ëŸ¬ ë°œìƒ ??? ì‹œ ?€ê¸?
                     await asyncio.sleep(0.1)
         
         except asyncio.CancelledError:
-            print("[DB] ì •ìƒ ì¢…ë£Œë¨")
+            print("[DB] ?•ìƒ ì¢…ë£Œ??)
             raise
         except Exception as e:
-            print(f"[DB] ì‹¬ê°í•œ ì˜¤ë¥˜: {e}")
+            print(f"[DB] ?¬ê°???¤ë¥˜: {e}")
 
     def close(self):
-        """DB ì—°ê²° í’€ ì¢…ë£Œ"""
+        """DB ?°ê²° ?€ ì¢…ë£Œ"""
         self.is_running = False
         if self.pool is not None:
             self.pool.close()
-            print("[DB] ì—°ê²° í’€ ì¢…ë£Œ ì™„ë£Œ")
+            print("[DB] ?°ê²° ?€ ì¢…ë£Œ ?„ë£Œ")

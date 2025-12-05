@@ -14,18 +14,20 @@ KIS_CNT_FIELDS = [
     "누적거래대금", "매도잔량", "매수잔량"
 ]
 
-# [호가 데이터] TR ID: H0STNHG0 (10단계 호가)
+# [호가 데이터] TR ID: H0STASP0 (10단계 호가 - Pipe 구분)
 KIS_HOGA_FIELDS = [
-    "호가시간", 
-    "매도호가1", "매도호가2", "매도호가3", "매도호가4", "매도호가5",
-    "매도호가6", "매도호가7", "매도호가8", "매도호가9", "매도호가10",
+    "호가시간", "체결구분코드",
+    "매도호가10", "매도호가9", "매도호가8", "매도호가7", "매도호가6",
+    "매도호가5", "매도호가4", "매도호가3", "매도호가2", "매도호가1",
     "매수호가1", "매수호가2", "매수호가3", "매수호가4", "매수호가5",
     "매수호가6", "매수호가7", "매수호가8", "매수호가9", "매수호가10",
-    "매도호가잔량1", "매도호가잔량2", "매도호가잔량3", "매도호가잔량4", "매도호가잔량5",
-    "매도호가잔량6", "매도호가잔량7", "매도호가잔량8", "매도호가잔량9", "매도호가잔량10",
+    "매도호가잔량10", "매도호가잔량9", "매도호가잔량8", "매도호가잔량7", "매도호가잔량6",
+    "매도호가잔량5", "매도호가잔량4", "매도호가잔량3", "매도호가잔량2", "매도호가잔량1",
     "매수호가잔량1", "매수호가잔량2", "매수호가잔량3", "매수호가잔량4", "매수호가잔량5",
     "매수호가잔량6", "매수호가잔량7", "매수호가잔량8", "매수호가잔량9", "매수호가잔량10",
-    "총매도잔량", "총매수잔량", "시간외총매도잔량", "시간외총매수잔량"
+    "총매도호가잔량", "총매수호가잔량", "시간외총매도호가잔량", "시간외총매수호가잔량",
+    "예상체결가", "예상체결량", "예상거래량", "예상체결대비", "부호", "예상등락률",
+    "누적거래량", "주식영업일자", "누적거래대금", "총매도호가건수", "총매수호가건수"
 ]
 
 class Kodex200DataProcessor:
@@ -79,14 +81,18 @@ class Kodex200DataProcessor:
         wap_ask = round(w_ask_sum / total_ask_vol_10) if total_ask_vol_10 > 0 else 0
         wap_bid = round(w_bid_sum / total_bid_vol_10) if total_bid_vol_10 > 0 else 0
         
-        total_ask_all = data.get('총매도잔량', 1)
-        total_bid_all = data.get('총매수잔량', 0)
+        # 총잔량 계산 (10단계 호가잔량 합산)
+        total_ask_all = sum(data.get(f'매도호가잔량{i}', 0) for i in range(1, 11))
+        total_bid_all = sum(data.get(f'매수호가잔량{i}', 0) for i in range(1, 11))
+        if total_ask_all == 0: total_ask_all = 1  # 0 나누기 방지
         imbalance_ratio = round(total_bid_all / total_ask_all, 2) if total_ask_all > 0 else 0
 
         return {
             "wap_ask": wap_ask,
             "wap_bid": wap_bid,
             "imbalance_ratio": imbalance_ratio,
+            "total_ask_all": total_ask_all,
+            "total_bid_all": total_bid_all,
             "resistance_wall": ask_wall_price,
             "support_wall": bid_wall_price,
             "max_bid_vol": max_bid_vol,
@@ -107,8 +113,8 @@ class Kodex200DataProcessor:
             if "H0STCNT0" in raw_msg:
                 tr_id = "H0STCNT0"
                 body_values = body_part.split('^')
-            elif "H0STNHG0" in raw_msg:
-                tr_id = "H0STNHG0"
+            elif "H0STASP0" in raw_msg:
+                tr_id = "H0STASP0"
                 body_values = body_part.split('^')
             else:
                 return None
@@ -127,13 +133,13 @@ class Kodex200DataProcessor:
                 
                 processed['type'] = 'TRADE'
 
-            # --- [CASE 2] 실시간 호가 데이터 (H0STNHG0) ---
-            elif tr_id == "H0STNHG0":
+            # --- [CASE 2] 실시간 호가 데이터 (H0STASP0) ---
+            elif tr_id == "H0STASP0":
                 limit = min(len(body_values), len(KIS_HOGA_FIELDS))
                 processed = dict(zip(KIS_HOGA_FIELDS[:limit], body_values[:limit]))
 
                 for k, v in processed.items():
-                    if ("호가" in k or "잔량" in k) and isinstance(v, str):
+                    if ("호가" in k or "잔량" in k or "거래" in k or "체결" in k) and isinstance(v, str):
                         try: processed[k] = int(v.replace(',', ''))
                         except: processed[k] = 0
 
@@ -148,7 +154,7 @@ class Kodex200DataProcessor:
             return processed
 
         except Exception as e:
-            # print(f"[Data Error] 파싱 중 오류: {e}")
+            # 파싱 실패는 조용히 넘김
             return None
 
     # ---------------------------------------------------------
@@ -163,19 +169,14 @@ class Kodex200DataProcessor:
                     data = self._parse_data(raw_msg)
                     
                     if data:
-                        # 1. 전략 모듈로 전송
-                        # 전략 모듈이 이해하기 쉬운 형태로 'code'와 'price'를 명시해주면 좋음
-                        # (여기서는 원본 data 딕셔너리를 그대로 보내되, 필요한 키가 있는지 확인)
-                        if 'code' not in data: 
-                            data['code'] = '069500' # KODEX 200 코드 강제 주입
-                        
-                        # 체결 데이터의 경우 '현재가'를 'price'로 매핑해주면 전략 모듈이 편함
+                        # 1. 전략 모듈로 전송 (체결 데이터만)
                         if data['type'] == 'TRADE':
+                            if 'code' not in data: 
+                                data['code'] = '069500' # KODEX 200 코드 강제 주입
                             data['price'] = data.get('현재가', 0)
+                            await self.strategy_queue.put(data)
                         
-                        await self.strategy_queue.put(data)
-                        
-                        # 2. DB 핸들러로 전송 [추가된 부분]
+                        # 2. DB 핸들러로 전송
                         table_name = ""
                         if data['type'] == 'TRADE':
                             table_name = "kodex200_trade"

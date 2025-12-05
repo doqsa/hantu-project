@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+import aiohttp
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
@@ -24,6 +25,10 @@ class TokenManager:
         self.app_key = os.getenv("APP_KEY")
         self.app_secret = os.getenv("APP_SECRET")
         self.trading_mode = os.getenv("TRADING_MODE", "VIRTUAL") # 기본값 모의투자
+        
+        # 토큰 정보 저장
+        self.access_token = None
+        self.session = None
 
         if not self.app_key or not self.app_secret:
             raise ValueError(f".env 파일({ENV_FILE})에서 APP_KEY/SECRET을 찾을 수 없습니다.")
@@ -113,15 +118,19 @@ class TokenManager:
         
         # 토큰이 있고 유효하면 그대로 반환
         if token_info and self._is_token_valid(token_info.get('token_expired_time')):
-            return token_info['access_token']
-        
-        # 아니면 새로 발급
-        new_token_data = self._get_new_token()
-        if new_token_data:
-            self._save_token_info(new_token_data)
-            return new_token_data['access_token']
+            self.access_token = token_info['access_token']
         else:
-            return None
+            # 아니면 새로 발급
+            new_token_data = self._get_new_token()
+            if new_token_data:
+                self._save_token_info(new_token_data)
+                self.access_token = new_token_data['access_token']
+            else:
+                return None
+        
+        # aiohttp 세션 생성
+        self.session = aiohttp.ClientSession()
+        return self.access_token
 
 if __name__ == '__main__':
     # 테스트 실행

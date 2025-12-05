@@ -42,7 +42,7 @@ class NAVFetcher:
         return start_time <= now <= end_time
 
     async def fetch_nav(self, item_code="069500"):
-        """REST API로 KODEX 200의 iNAV 및 현재가를 조회합니다."""
+        """REST API로 KODEX 200의 현재가를 조회합니다. (NAV는 별도 소스 필요)"""
         path = "/uapi/domestic-stock/v1/quotations/inquire-price"
         url = f"{self.base_url}{path}"
         
@@ -55,12 +55,12 @@ class NAVFetcher:
             "authorization": f"Bearer {self.current_token}",
             "appkey": self.app_key,
             "appsecret": self.app_secret,
-            "tr_id": "FHKST01010100" # 주식/ETF 현재가 시세 TR ID (실전용)
+            "tr_id": "FHKST01010100"
         }
         
         params = {
-            "FID_COND_MRKT_DIV_CODE": "J", # 주식, ETF 포함
-            "FID_INPUT_ISCD": item_code    # 종목코드 (069500)
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": item_code
         }
 
         try:
@@ -68,40 +68,24 @@ class NAVFetcher:
                 async with session.get(url, headers=headers, params=params) as resp:
                     data = await resp.json()
                     
-                    # 토큰 만료 에러(E_ or 401 등) 발생 시 토큰 갱신 로직이 필요할 수 있음
-                    # 여기서는 간단히 성공 여부만 체크
-                    
                     if data.get('rt_cd') == '0':
                         output = data['output']
                         
-                        # API 응답 필드 확인
-                        nav_str = output.get('nav', '0.0')
+                        # KIS API에서는 NAV 필드 미제공 - 현재가만 수집
                         price_str = output.get('stck_prpr', '0')
-                        
-                        # 가끔 NAV가 비어있는 경우 방어 코드
-                        if not nav_str: nav_str = '0.0'
-                        
-                        nav_val = float(nav_str)
                         price_val = float(price_str)
                         
-                        # NAV가 0이면 괴리율 계산 불가
-                        if nav_val == 0:
-                            return None
-
-                        # 괴리율 계산: (현재가 - NAV) / NAV * 100
-                        disparity = ((price_val - nav_val) / nav_val) * 100
-                        
+                        # 현재가만 저장 (NAV는 별도 소스 필요)
                         result = {
                             "type": "NAV",
                             "code": item_code,
-                            "nav": nav_val,
+                            "nav": None,  # KIS API 미제공
                             "price": price_val,
-                            "disparity": round(disparity, 4),
+                            "disparity": None,  # NAV 없으므로 계산 불가
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
                         return result
                     else:
-                        # 오류 메시지 출력 (토큰 만료일 수도 있음)
                         msg = data.get('msg1', 'Unknown Error')
                         print(f"[NAV API 오류] {msg}")
                         return None
@@ -114,11 +98,11 @@ class NAVFetcher:
         print("[NAV Fetcher] 모듈 시작됨...")
         
         while True:
-            # 1. 장 운영 시간 체크
-            if not self._is_market_open():
-                print(f"[휴장] 장 운영 시간이 아닙니다. 대기 중... ({datetime.now().strftime('%H:%M:%S')})")
-                await asyncio.sleep(60) # 1분 대기
-                continue
+            # 1. 장 운영 시간 체크 (테스트용 비활성화 - 주석 처리)
+            # if not self._is_market_open():
+            #     print(f"[휴장] 장 운영 시간이 아닙니다. 대기 중... ({datetime.now().strftime('%H:%M:%S')}))")
+            #     await asyncio.sleep(60) # 1분 대기
+            #     continue
 
             # 2. 데이터 조회
             nav_data = await self.fetch_nav("069500")

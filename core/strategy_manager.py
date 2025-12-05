@@ -30,7 +30,7 @@ class StrategyManager:
 
     async def fetch_initial_data(self):
         """ [웜업] 장 시작 전, REST API로 과거 1분봉 100개를 가져와 채워넣음 """
-        print("[Strategy] 📡 과거 데이터 요청 중... (Waiting 방지)")
+        print("[Strategy] [데이터] 과거 데이터 요청 중... (Waiting 방지)")
         
         url = "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
         headers = {
@@ -52,11 +52,18 @@ class StrategyManager:
         }
 
         try:
+            print(f"[Strategy] API 요청 시작: {url}")
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, params=params) as response:
+                print("[Strategy] 세션 생성 완료")
+                async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    print(f"[Strategy] 응답 상태: {response.status}")
                     data = await response.json()
-                    if data['rt_cd'] == '0':
-                        items = data['output2']
+                    print(f"[Strategy] 응답 데이터: {data.get('rt_cd')}, {data.get('msg1')}")
+                    
+                    if data.get('rt_cd') == '0':
+                        items = data.get('output2', [])
+                        print(f"[Strategy] 데이터 개수: {len(items)}")
+                        
                         # 과거 -> 현재 순으로 정렬
                         temp_list = []
                         for item in reversed(items):
@@ -70,11 +77,17 @@ class StrategyManager:
                         
                         # DataFrame 초기화
                         self.ohlc_data = pd.DataFrame(temp_list)
-                        print(f"[Strategy] ✅ 과거 데이터 {len(self.ohlc_data)}개 로드 완료! 즉시 매매 가능.")
+                        print(f"[Strategy] [OK] 과거 데이터 {len(self.ohlc_data)}개 로드 완료! 즉시 매매 가능.")
                     else:
-                        print(f"[Strategy] ⚠️ 초기 데이터 로드 실패: {data['msg1']}")
+                        print(f"[Strategy] [경고] 초기 데이터 로드 실패: {data.get('msg1')}")
+                        # 실패해도 계속 진행
+                        self.ohlc_data = pd.DataFrame()
+        except asyncio.TimeoutError:
+            print("[Strategy] [오류] API 요청 타임아웃 (10초)")
+            self.ohlc_data = pd.DataFrame()
         except Exception as e:
-            print(f"[Strategy] 웜업 중 에러: {e}")
+            print(f"[Strategy] [오류] 웜업 중 에러: {type(e).__name__}: {e}")
+            self.ohlc_data = pd.DataFrame()
 
     def calculate_indicators(self):
         """ pandas-ta를 이용한 정밀 계산 """
@@ -93,8 +106,10 @@ class StrategyManager:
         # iloc[-1]은 가장 최근 데이터
         current_close = self.ohlc_data['close'].iloc[-1]
         
-        # pandas_ta 컬럼명: BBL_20_2.0
-        lower_band = bb['BBL_20_2.0'].iloc[-1]
+        # pandas_ta 컬럼명이 버전마다 다를 수 있으므로 안전하게 추출
+        # BBL_20_2.0 또는 BBL_20_2 등으로 나올 수 있음
+        bbl_col = [col for col in bb.columns if col.startswith('BBL')][0]
+        lower_band = bb[bbl_col].iloc[-1]
         current_rsi = rsi_series.iloc[-1]
 
         return lower_band, current_rsi, current_close
@@ -103,7 +118,7 @@ class StrategyManager:
         # [중요] 시작하자마자 데이터 채우기 (5분 대기 삭제)
         await self.fetch_initial_data()
         
-        print("[Strategy] 🚀 실시간 전략 감시 시작 (BB + RSI)")
+        print("[Strategy] [시작] 실시간 전략 감시 시작 (BB + RSI)")
         
         try:
             while True:
@@ -153,7 +168,7 @@ class StrategyManager:
                             # [진입 로직] b1
                             if self.current_state == "EMPTY":
                                 if last_close < lower_band and rsi < 30:
-                                    print(f"🚀 [매수] 과매도 포착! (b1)")
+                                    print(f"[매수] 과매도 포착! (b1)")
                                     await self.order_queue.put({
                                         "type": "BUY", "stage": "b1", "price": last_close
                                     })

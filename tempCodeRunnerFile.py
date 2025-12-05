@@ -29,8 +29,6 @@ except ImportError as e:
 try:
     from exchange_fetcher import ExchangeFetcher
     from global_market_fetcher import GlobalMarketFetcher
-    from nav_fetcher import NAVFetcher
-    # from balance_fetcher import BalanceFetcher  # [비활성화] 계좌 API 미지원
 except ImportError as e:
     print(f"[오류] Fetcher 모듈 임포트 실패: {e}")
     sys.exit(1)
@@ -80,7 +78,6 @@ async def main():
     # (1) 인증
     try:
         token_manager = TokenManager()
-        # 토큰 발급/갱신 (선물 코드 조회 전 필요)
         if not token_manager.manage_token():
             logger.critical("[오류] 토큰 발급 실패.")
             return
@@ -109,15 +106,6 @@ async def main():
 
     exchange_fetcher = ExchangeFetcher(token_manager, db_queue)
     global_fetcher = GlobalMarketFetcher(db_queue)
-    nav_fetcher = NAVFetcher(token_manager, db_queue)
-    # balance_fetcher = BalanceFetcher(token_manager, db_queue)  # [비활성화]
-    
-    # (3.5) 웹소켓 접속키 확보 단계 (추가된 핵심 수정 부분)
-    logger.info("[WS] 웹소켓 접속키 확보 중...")
-    if not await ws_handler._get_websocket_key():
-        logger.critical("[WS 오류] 웹소켓 접속키 발급 실패. 시스템 종료.")
-        return
-    logger.info("[WS] ✅ 웹소켓 접속키 확보 완료.")
 
     # (4) 태스크 가동
     tasks = [
@@ -127,8 +115,6 @@ async def main():
         asyncio.create_task(futures_processor.run()),
         asyncio.create_task(exchange_fetcher.run()),
         asyncio.create_task(global_fetcher.run()),
-        asyncio.create_task(nav_fetcher.run()),
-        # asyncio.create_task(balance_fetcher.run()),  # [비활성화]
         asyncio.create_task(strategy_manager.run()),
         asyncio.create_task(order_manager.run())
     ]
@@ -151,7 +137,7 @@ async def main():
         # 1. 소켓 연결 해제 (더 이상 데이터 안 들어오게)
         ws_handler.stop_listening()
         
-        # 2. DB 큐에 남은 데이터 처리를 위해 짧은 대기
+        # 2. DB 큐에 남은 데이터 처리를 위해 짧은 대기 (사장님이 작성하신 훌륭한 로직 유지)
         logger.info("[종료] DB 큐 최종 처리 중... (최대 2초 대기)")
         try:
             # 큐가 비거나 타임아웃 될 때까지 대기

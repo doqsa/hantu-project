@@ -49,6 +49,7 @@ class FuturesDataProcessor:
             
             # 데이터 구조가 파이프 4개로 구성되므로 길이를 4로 체크해야 안전함
             if len(parts) < 4: 
+                print(f"[FuturesData] ⚠️ 잘못된 데이터 구조 (구분자 개수 부족): {raw_msg[:50]}...")
                 return None
 
             tr_id = parts[1]     # H0FCCNT0
@@ -56,11 +57,14 @@ class FuturesDataProcessor:
             
             # TR ID 확인 (H0FCCNT0: 선물 체결)
             if "H0FCCNT0" not in tr_id:
+                print(f"[FuturesData] ⚠️ 선물 데이터 아님 (TR_ID: {tr_id})")
                 return None
             
             # 2. 바디 분리
             # 마지막 데이터에 \r\n 등이 붙어있을 수 있으므로 strip() 처리 권장
             body_values = body_part.strip().split('^')
+            
+            print(f"[FuturesData] 📥 선물 데이터 수신: 필드 {len(body_values)}개, 코드={parts[2]}, 첫 데이터={body_values[0] if body_values else '없음'}")
             
             # 필드 매핑 (데이터 개수에 맞춰 자르기)
             limit = min(len(body_values), len(KIS_FUTURES_FIELDS))
@@ -94,50 +98,26 @@ class FuturesDataProcessor:
             processed['type'] = 'FUTURES'
             processed['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
             
+            print(f"[FuturesData] ✅ 파싱 완료: 가격={processed.get('현재가')}, 미결제={processed.get('미결제약정')}")
             return processed
 
         except Exception as e:
-            # print(f"[Futures Error] 파싱 중 오류: {e} / Data: {raw_msg[:30]}...")
+            print(f"[FuturesData] ❌ 파싱 중 오류: {e} / Data: {raw_msg[:30]}...")
             return None
 
     async def run(self):
         """
         프로세서 실행 루프: 원시 데이터를 가져와 파싱 후 배포
-        """
-        print("[FuturesData] 데이터 처리 루프 시작...")
-        try:
-            while True:
-                # 1. 큐에서 데이터 꺼내기
-                raw_msg = await self.raw_queue.get()
-                
-                # 2. 데이터 파싱
-                data = self._parse_data(raw_msg)
-                
-                # 3. 유효한 선물 데이터인 경우 배포
-                if data:
-                    # (A) 전략 모듈로 전송 (Fast)
-                    await self.strategy_queue.put(data)
-                    
-                    # (B) DB 모듈로 전송 (Async)
-                    if self.db_queue:
-                        # DB 저장을 위해 테이블명 지정
-                        db_packet = {
-                            "table": "kospi200_futures",
-                            "data": data
-                        }
-                        await self.db_queue.put(db_packet)
-                    
-                    # (로그) - 테스트용 (너무 많으면 주석 처리)
-                    # print(f"🚀 [선물] 가격: {data['현재가']} | 미결제: {data['미결제약정']}")
         
+        [주석 처리] 선물 거래 교육 이수 및 권한 신청 후 활성화 필요
+        """
+        print("[FuturesData] [대기중] 선물 거래 권한 신청 후 활성화 예정...")
+        try:
+            # 권한 신청까지는 무한 대기
+            await asyncio.sleep(float('inf'))
         except asyncio.CancelledError:
             print("[FuturesData] 정상 종료됨")
             raise
-        except Exception as e:
-            print(f"[FuturesData] 오류 발생: {e}")
-
-            # 4. 작업 완료 신호
-            self.raw_queue.task_done()
 
 # =========================================================
 # 테스트 코드 (이 파일만 실행 시 작동)
